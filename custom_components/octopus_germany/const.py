@@ -12,6 +12,7 @@ UPDATE_INTERVAL = 15  # minutes
 MEASUREMENTS_UPDATE_INTERVAL_HOURS = 4
 MEASUREMENTS_PAGE_SIZE = 100
 MEASUREMENTS_MAX_PAGES = 200
+MEASUREMENTS_MIN_INTERVAL_HOURS = 3
 
 # Schema exploration (run once for debugging)
 EXPLORE_SCHEMA_ONCE = True  # Set to True to run schema exploration once

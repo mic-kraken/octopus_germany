@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import timedelta, datetime, date
+from datetime import timedelta, datetime, date, timezone
 import inspect
 
 from homeassistant.config_entries import ConfigEntry
@@ -15,6 +15,7 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.storage import Store
 from homeassistant.util.dt import utcnow, as_utc, parse_datetime
 
 from .const import (
@@ -24,6 +25,7 @@ from .const import (
     UPDATE_INTERVAL,
     DEBUG_ENABLED,
     MEASUREMENTS_UPDATE_INTERVAL_HOURS,
+    MEASUREMENTS_MIN_INTERVAL_HOURS,
 )
 from .octopus_germany import OctopusGermany
 
@@ -1245,18 +1247,44 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 else "None",
             )
 
+    measurements_store = Store(
+        hass, 1, f"{DOMAIN}.{entry.entry_id}.measurements_fetch"
+    )
+
     async def async_refresh_measurements(_now=None):
         """Fetch yesterday's interval readings on a slow schedule.
 
         Kraken typically ingests smart meter intervals every 3–4 hours, so
         polling more often only repeats the same Measurements resolve.
+        Persists the last successful fetch so a Home Assistant restart does
+        not immediately stampede the API.
         """
         if not coordinator.data:
             return
 
+        now = datetime.now(timezone.utc)
+        stored = await measurements_store.async_load() or {}
+        last_iso = stored.get("last_fetch_at")
+        if last_iso:
+            try:
+                last_fetch_at = datetime.fromisoformat(last_iso)
+                if last_fetch_at.tzinfo is None:
+                    last_fetch_at = last_fetch_at.replace(tzinfo=timezone.utc)
+                elapsed = now - last_fetch_at
+                if elapsed < timedelta(hours=MEASUREMENTS_MIN_INTERVAL_HOURS):
+                    _LOGGER.debug(
+                        "Skipping measurements fetch; last run %s ago (min %s h)",
+                        elapsed,
+                        MEASUREMENTS_MIN_INTERVAL_HOURS,
+                    )
+                    return
+            except ValueError:
+                _LOGGER.debug("Ignoring invalid measurements last_fetch_at: %s", last_iso)
+
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         updated = False
         new_data = {key: dict(value) for key, value in coordinator.data.items()}
+        fetch_succeeded = False
 
         for account_num in account_numbers:
             account_data = new_data.get(account_num)
@@ -1285,6 +1313,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if readings is None:
                 continue
 
+            fetch_succeeded = True
             account_data["electricity_smart_meter_readings"] = readings
             account_data["electricity_smart_meter_readings_date"] = yesterday
             account_data["electricity_smart_meter_readings_label"] = "yesterday"
@@ -1292,6 +1321,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         if updated:
             coordinator.async_set_updated_data(new_data)
+
+        if fetch_succeeded:
+            await measurements_store.async_save(
+                {
+                    "last_fetch_at": now.isoformat(),
+                    "date": yesterday,
+                }
+            )
 
         if HAS_RECORDER:
             try:
