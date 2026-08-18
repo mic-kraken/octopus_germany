@@ -1656,26 +1656,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 end_date.strftime("%Y-%m-%d"),
             )
 
-            # Collect all readings for the period
-            all_readings = {}
-            current_date = start_date
+            # Collect all readings for the period in one closed-window query
+            start_on = start_date.strftime("%Y-%m-%d")
+            end_on = end_date.strftime("%Y-%m-%d")
             total_days = (end_date - start_date).days + 1
 
-            while current_date <= end_date:
-                date_str = current_date.strftime("%Y-%m-%d")
-                try:
-                    readings = await client.fetch_electricity_smart_meter_readings_v2(
-                        account_number, property_id, date_str
-                    )
-                    if readings:
-                        all_readings[date_str] = readings
-                        _LOGGER.debug(
-                            "Fetched %d readings for %s", len(readings), date_str
-                        )
-                except Exception as e:
-                    _LOGGER.warning("Failed to fetch readings for %s: %s", date_str, e)
+            readings = await client.fetch_electricity_measurements(
+                account_number,
+                property_id,
+                start_on,
+                end_on,
+                reading_frequency_type="RAW_INTERVAL",
+                page_size=500,
+            )
 
-                current_date += timedelta(days=1)
+            all_readings = {}
+            for reading in readings or []:
+                start_at = (
+                    reading.get("start_time")
+                    or reading.get("startAt")
+                    or reading.get("start_at")
+                    or ""
+                )
+                if not start_at:
+                    continue
+                try:
+                    reading_time = datetime.fromisoformat(
+                        start_at.replace("Z", "+00:00")
+                    )
+                except ValueError:
+                    continue
+                date_str = reading_time.date().isoformat()
+                if date_str < start_on or date_str > end_on:
+                    continue
+                all_readings.setdefault(date_str, []).append(reading)
 
             if not all_readings:
                 from homeassistant.exceptions import ServiceValidationError
