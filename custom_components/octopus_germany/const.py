@@ -14,8 +14,8 @@ MEASUREMENTS_PAGE_SIZE = 100
 MEASUREMENTS_MAX_PAGES = 200
 MEASUREMENTS_MIN_INTERVAL_HOURS = 3
 
-# Schema exploration (run once for debugging)
-EXPLORE_SCHEMA_ONCE = True  # Set to True to run schema exploration once
+# Schema exploration (run once for debugging). Off for normal installs.
+EXPLORE_SCHEMA_ONCE = False
 
 # Token management
 TOKEN_REFRESH_MARGIN = (
@@ -24,7 +24,7 @@ TOKEN_REFRESH_MARGIN = (
 TOKEN_AUTO_REFRESH_INTERVAL = 50 * 60  # Auto refresh token every 50 minutes
 
 # Debug options
-DEBUG_ENABLED = True
+DEBUG_ENABLED = False
 LOG_API_RESPONSES = False  # Set to True to log full API responses
 LOG_TOKEN_RESPONSES = (
     False  # Set to True to log token-related responses (login, refresh)
