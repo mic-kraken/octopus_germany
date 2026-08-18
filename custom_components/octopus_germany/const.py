@@ -8,6 +8,11 @@ CONF_PASSWORD = "password"
 # Account/state polling interval. Meter interval data is fetched separately.
 UPDATE_INTERVAL = 15  # minutes
 
+# Kraken typically ingests interval readings every 3–4 hours.
+MEASUREMENTS_UPDATE_INTERVAL_HOURS = 4
+MEASUREMENTS_PAGE_SIZE = 100
+MEASUREMENTS_MAX_PAGES = 200
+
 # Schema exploration (run once for debugging)
 EXPLORE_SCHEMA_ONCE = True  # Set to True to run schema exploration once
 

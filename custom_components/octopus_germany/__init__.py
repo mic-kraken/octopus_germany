@@ -14,9 +14,17 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, SupportsResponse
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.helpers.event import async_track_time_interval
 from homeassistant.util.dt import utcnow, as_utc, parse_datetime
 
-from .const import DOMAIN, CONF_EMAIL, CONF_PASSWORD, UPDATE_INTERVAL, DEBUG_ENABLED
+from .const import (
+    DOMAIN,
+    CONF_EMAIL,
+    CONF_PASSWORD,
+    UPDATE_INTERVAL,
+    DEBUG_ENABLED,
+    MEASUREMENTS_UPDATE_INTERVAL_HOURS,
+)
 from .octopus_germany import OctopusGermany
 
 import voluptuous as vol
@@ -1097,7 +1105,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     dates_to_import.append(d)
 
             if not dates_to_import:
-                return
+                continue
 
             # Get the last known sum from HA recorder
             try:
@@ -1237,25 +1245,68 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 else "None",
             )
 
-    # Import consumption statistics after each coordinator refresh
-    async def _safe_import_statistics():
-        try:
-            await async_import_consumption_statistics()
-        except Exception as e:
-            _LOGGER.warning("Error importing consumption statistics: %s", e)
+    async def async_refresh_measurements(_now=None):
+        """Fetch yesterday's interval readings on a slow schedule.
 
-    def _on_coordinator_update() -> None:
-        """Schedule statistics import when coordinator data updates."""
-        hass.async_create_task(_safe_import_statistics())
+        Kraken typically ingests smart meter intervals every 3–4 hours, so
+        polling more often only repeats the same Measurements resolve.
+        """
+        if not coordinator.data:
+            return
 
-    coordinator.async_add_listener(_on_coordinator_update)
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        updated = False
+        new_data = {key: dict(value) for key, value in coordinator.data.items()}
 
-    # Also run the initial statistics import now
-    if HAS_RECORDER and coordinator.data:
-        try:
-            await async_import_consumption_statistics()
-        except Exception as e:
-            _LOGGER.warning("Error during initial statistics import: %s", e)
+        for account_num in account_numbers:
+            account_data = new_data.get(account_num)
+            if not account_data:
+                continue
+            property_ids = account_data.get("property_ids") or []
+            if not property_ids:
+                continue
+            property_id = property_ids[0]
+            try:
+                readings = await api.fetch_electricity_measurements(
+                    account_num,
+                    property_id,
+                    yesterday,
+                    yesterday,
+                    reading_frequency_type="HOUR_INTERVAL",
+                )
+            except Exception as e:
+                _LOGGER.warning(
+                    "Failed to refresh measurements for account %s: %s",
+                    account_num,
+                    e,
+                )
+                continue
+
+            if readings is None:
+                continue
+
+            account_data["electricity_smart_meter_readings"] = readings
+            account_data["electricity_smart_meter_readings_date"] = yesterday
+            account_data["electricity_smart_meter_readings_label"] = "yesterday"
+            updated = True
+
+        if updated:
+            coordinator.async_set_updated_data(new_data)
+
+        if HAS_RECORDER:
+            try:
+                await async_import_consumption_statistics()
+            except Exception as e:
+                _LOGGER.warning("Error importing consumption statistics: %s", e)
+
+    await async_refresh_measurements()
+    entry.async_on_unload(
+        async_track_time_interval(
+            hass,
+            async_refresh_measurements,
+            timedelta(hours=MEASUREMENTS_UPDATE_INTERVAL_HOURS),
+        )
+    )
 
     # Store API, account number and coordinator in hass.data
     hass.data[DOMAIN][entry.entry_id] = {
